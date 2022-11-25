@@ -35,6 +35,7 @@ async function run() {
 
         const userCollection = client.db('used').collection('users');
         const categoryCollection = client.db('used').collection('category');
+        const productsCollection = client.db('used').collection('products');
 
         async function verifyAdmin(req, res, next) {
             const id = req.decoded?.uid;
@@ -65,8 +66,62 @@ async function run() {
             res.send(result);
         });
 
-        // get category
+        // insert product 
+        app.post('/product', verifyJWT, async (req, res) => {
+            const uid = req.decoded.uid;
+            const product = req.body;
+            if (uid !== product?.authorID) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const result = await productsCollection.insertOne(product);
+            res.send(result);
+        });
 
+        // get my products 
+        app.get('/my-products/:uid', verifyJWT, async (req, res) => {
+            const decodedUid = req.decoded.uid;
+            const uid = req.params.uid;
+            if (uid !== decodedUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const query = { authorID: uid };
+            const result = await productsCollection.find({}).toArray();
+            res.send(result);
+        });
+
+        // advertise status update 
+        app.patch('/my-products/:id', verifyJWT, async (req, res) => {
+            const decodedUid = req.decoded.uid;
+            const uid = req.body.uid;
+            if (uid !== decodedUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const status = req.body.status;
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const updatedDoc = {
+                $set: {
+                    advertise: status
+                }
+            }
+            const result = await productsCollection.updateOne(query, updatedDoc);
+            res.send(result);
+        });
+
+        //delete product 
+        app.delete('/my-products/:id', verifyJWT, async (req, res) => {
+            const decodedUid = req.decoded.uid;
+            const uid = req.body.uid;
+            if (uid !== decodedUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const result = await productsCollection.deleteOne(query);
+            res.send(result);
+        });
+
+        // get category
         app.get('/category', async (req, res) => {
             const query = {};
             const result = await categoryCollection.find(query).toArray();
