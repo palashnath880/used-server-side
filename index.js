@@ -36,6 +36,7 @@ async function run() {
         const userCollection = client.db('used').collection('users');
         const categoryCollection = client.db('used').collection('category');
         const productsCollection = client.db('used').collection('products');
+        const wishListCollection = client.db('used').collection('wishlist');
 
         async function verifyAdmin(req, res, next) {
             const id = req.decoded?.uid;
@@ -47,23 +48,99 @@ async function run() {
             next();
         }
 
+        // wishlist
+        app.post('/wishlist', verifyJWT, async (req, res) => {
+            const wishlistProduct = req.body;
+            const uid = req.body.authorID;
+            const decodedUid = req.decoded.uid;
+            if (uid !== decodedUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const result = await wishListCollection.insertOne(wishlistProduct);
+            res.send(result);
+        });
+
+        // get wishlist
+        app.get('/wishlist/:uid', async (req, res) => {
+            const uid = req.params.uid;
+            const query = { authorID: uid };
+            const result = await wishListCollection.aggregate([
+                { $match: query },
+                {
+                    $lookup: {
+                        from: 'products',
+                        let: { product_id: "$productID" },
+                        pipeline: [
+                            {
+                                $project: {
+                                    _id: 1,
+                                    product_name: 1,
+                                    price: 1,
+                                    image: 1,
+                                    category: 1,
+                                    location: 1,
+                                    condition: 1,
+                                    id: { "$toObjectId": "$$product_id" }
+                                }
+                            },
+                            { $match: { $expr: { $eq: ["$_id", "$id"] } } }
+                        ],
+                        as: 'product'
+                    }
+                },
+                {
+                    $set: {
+                        product: { $arrayElemAt: ["$product", 0] }
+                    }
+                }
+            ]).toArray();
+            res.send(result);
+        });
+
+        // wishlist delete
+        app.delete('/wishlist/:uid/:id', verifyJWT, async (req, res) => {
+            const uid = req.params.uid;
+            const id = req.params.id;
+            const decodedUid = req.decoded.uid;
+            if (uid != decodedUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const query = { _id: ObjectId(id) };
+            const result = await wishListCollection.deleteOne(query);
+            res.send(result);
+        });
+
+        // get advertise product 
+        app.get('/advertise-product', async (req, res) => {
+            const result = await productsCollection.aggregate([
+                {
+                    $match: { advertise: true }
+                },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'authorID',
+                        foreignField: 'uid',
+                        pipeline: [
+                            { $project: { _id: 0, role: 0, uid: 0 } }
+                        ],
+                        as: 'author'
+                    }
+                },
+                {
+                    $set: {
+                        author: { $arrayElemAt: ["$author", 0] }
+                    }
+                }
+            ]).toArray();
+            res.send(result);
+        });
+
         // create jwt (JSON web token )
         app.post('/used-jwt', (req, res) => {
             const user = req.body;
             const createToken = jwt.sign({ uid: user?.uid }, secretToken);
             res.send({ token: createToken });
-        });
-
-        // create user
-        app.post('/users', async (req, res) => {
-            const user = req.body;
-            const query = { uid: user?.uid }
-            const findUser = await userCollection.findOne(query);
-            if (findUser) {
-                return res.send(findUser);
-            }
-            const result = await userCollection.insertOne(user);
-            res.send(result);
         });
 
         // insert product 
@@ -140,6 +217,18 @@ async function run() {
             const id = req.params.id;
             const query = { _id: ObjectId(id) };
             const result = await categoryCollection.deleteOne(query);
+            res.send(result);
+        });
+
+        // create user
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+            const query = { uid: user?.uid }
+            const findUser = await userCollection.findOne(query);
+            if (findUser) {
+                return res.send(findUser);
+            }
+            const result = await userCollection.insertOne(user);
             res.send(result);
         });
 
