@@ -3,6 +3,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 
@@ -13,6 +14,7 @@ const port = process.env.PORT || 5000;
 const mongoUser = process.env.USER_NAME
 const mongoPass = process.env.USER_PASS;
 const secretToken = process.env.ACCESS_TOKEN;
+
 
 const uri = `mongodb+srv://${mongoUser}:${mongoPass}@cluster0.cjfgfqu.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
@@ -48,6 +50,45 @@ async function run() {
             next();
         }
 
+        // stripe payment
+        app.post("/create-payment-intent", async (req, res) => {
+
+            const order = req.body;
+            const amount = order.price * 100;
+
+            // Create a PaymentIntent with the order amount and currency
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: "usd",
+                automatic_payment_methods: {
+                    enabled: true,
+                },
+            });
+
+            res.send({
+                clientSecret: paymentIntent.client_secret,
+            });
+        });
+
+        // insert product 
+        app.post('/product', verifyJWT, async (req, res) => {
+            const uid = req.decoded.uid;
+            const product = req.body;
+            if (uid !== product?.authorID) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const result = await productsCollection.insertOne(product);
+            res.send(result);
+        });
+
+        // get product by specific product id
+        app.get('/product/:id', async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const result = await productsCollection.findOne(query);
+            res.send(result);
+        });
+
         // wishlist
         app.post('/wishlist', verifyJWT, async (req, res) => {
             const wishlistProduct = req.body;
@@ -61,7 +102,7 @@ async function run() {
         });
 
         // get wishlist
-        app.get('/wishlist/:uid', async (req, res) => {
+        app.get('/wishlist/:uid', verifyJWT, async (req, res) => {
             const uid = req.params.uid;
             const query = { authorID: uid };
             const result = await wishListCollection.aggregate([
@@ -141,17 +182,6 @@ async function run() {
             const user = req.body;
             const createToken = jwt.sign({ uid: user?.uid }, secretToken);
             res.send({ token: createToken });
-        });
-
-        // insert product 
-        app.post('/product', verifyJWT, async (req, res) => {
-            const uid = req.decoded.uid;
-            const product = req.body;
-            if (uid !== product?.authorID) {
-                return res.status(403).send({ message: 'unautorized' });
-            }
-            const result = await productsCollection.insertOne(product);
-            res.send(result);
         });
 
         // get my products 
