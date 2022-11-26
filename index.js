@@ -39,6 +39,7 @@ async function run() {
         const categoryCollection = client.db('used').collection('category');
         const productsCollection = client.db('used').collection('products');
         const wishListCollection = client.db('used').collection('wishlist');
+        const ordersCollection = client.db('used').collection('orders');
 
         async function verifyAdmin(req, res, next) {
             const id = req.decoded?.uid;
@@ -68,6 +69,37 @@ async function run() {
             res.send({
                 clientSecret: paymentIntent.client_secret,
             });
+        });
+
+        // create order
+        app.post('/orders', (req, res) => {
+            const order = req.body;
+            const query = { _id: ObjectId(order.productID) };
+            const deleteQuery = {
+                productID: order.productID,
+                authorID: order.customer_id,
+            };
+            const updatedDoc = {
+                $set: {
+                    sell: true,
+                }
+            };
+            // insert to order collection
+            ordersCollection.insertOne(order)
+                .then(result => {
+                    if (result.acknowledged) {
+                        // update product sell status
+                        productsCollection.updateOne(query, updatedDoc)
+                            .then(() => {
+                                // delete wishlist
+                                wishListCollection.deleteOne(deleteQuery)
+                                    .then(() => res.send(result))
+                                    .catch((err) => res.send(err))
+                            })
+                            .catch(err => res.send(err));
+                    }
+                })
+                .catch(err => res.send(err));
         });
 
         // insert product 
