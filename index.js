@@ -196,6 +196,29 @@ async function run() {
             res.send(result);
         });
 
+        app.get('/products', async (req, res) => {
+            const query = {};
+            const result = await productsCollection.aggregate([
+                {
+                    $match: { sell: { $exists: false } }
+                },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'authorID',
+                        foreignField: 'uid',
+                        as: 'author',
+                    }
+                },
+                {
+                    $set: {
+                        author: { $arrayElemAt: ["$author", 0] }
+                    }
+                }
+            ]).sort({ _id: -1 }).toArray();
+            res.send(result);
+        });
+
         // get product by specific product id
         app.get('/product/:id', async (req, res) => {
             const id = req.params.id;
