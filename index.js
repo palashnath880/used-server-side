@@ -57,8 +57,8 @@ async function run() {
             next();
         }
 
-        // stripe payment
-        app.post("/create-payment-intent", async (req, res) => {
+        // stripe payment intent
+        app.post("/create-payment-intent", verifyJWT, async (req, res) => {
 
             const order = req.body;
             const amount = order.price * 100;
@@ -78,44 +78,76 @@ async function run() {
         });
 
         // create order
-        app.post('/orders', (req, res) => {
+        app.post('/orders', verifyJWT, async (req, res) => {
             const order = req.body;
-            const query = { _id: ObjectId(order.productID) };
-            const deleteQuery = {
-                productID: order.productID,
-                authorID: order.customer_id,
-            };
-            const updatedDoc = {
-                $set: {
-                    sell: true,
-                }
-            };
+            // const query = { _id: ObjectId(order.productID) };
+            // const deleteQuery = {
+            //     productID: order.productID,
+            //     authorID: order.customer_id,
+            // };
+            // const updatedDoc = {
+            //     $set: {
+            //         sell: true,
+            //     }
+            // };
             // insert to order collection
-            ordersCollection.insertOne(order)
-                .then(result => {
-                    if (result.acknowledged) {
+            const decodedUid = req.decoded.uid;
+            const customerUid = req.body.customerId;
+            if (decodedUid !== customerUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const result = await ordersCollection.insertOne(order);
+            res.send(result);
+            // .then(result => {
+            //     if (result.acknowledged) {
+            //         // update product sell status
+            //         productsCollection.updateOne(query, updatedDoc)
+            //             .then(() => {
+            //                 // delete wishlist
+            //                 wishListCollection.deleteOne(deleteQuery)
+            //                     .then(() => res.send(result))
+            //                     .catch((err) => res.send(err))
+            //             })
+            //             .catch(err => res.send(err));
+            //     }
+            // })
+            // .catch(err => res.send(err));
+        });
+
+        // order payment
+        app.patch('/orders/:orderId/:productId', verifyJWT, (req, res) => {
+
+            const orderId = req.params.orderId;
+            const productId = req.params.productId;
+            const payment = req.body;
+            const decodedUid = req.decoded.uid;
+            const customerId = req.headers.customer_id;
+
+            const updatedQuery = { _id: ObjectId(orderId) };
+            const updatedDoc = {
+                $set: payment,
+            };
+            if (decodedUid !== customerId) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            ordersCollection.updateOne(updatedQuery, updatedDoc)
+                .then(async (response) => {
+                    if (response.acknowledged) {
                         // update product sell status
-                        productsCollection.updateOne(query, updatedDoc)
-                            .then(() => {
-                                // delete wishlist
-                                wishListCollection.deleteOne(deleteQuery)
-                                    .then(() => res.send(result))
-                                    .catch((err) => res.send(err))
-                            })
-                            .catch(err => res.send(err));
+                        const result = await productsCollection.updateOne({ _id: ObjectId(productId) }, { $set: { sell: true } });
+                        res.send(result);
                     }
                 })
-                .catch(err => res.send(err));
         });
 
         // my orders 
-        app.get('/my-orders/:uid', verifyJWT, async (req, res) => {
+        app.get('/orders/:uid', verifyJWT, async (req, res) => {
             const decodedUid = req.decoded.uid;
             const uid = req.params.uid;
             if (decodedUid !== uid) {
                 return res.status(403).send({ message: 'unautorized' });
             }
-            const query = { customer_id: uid };
+            const query = { customerId: uid };
             const result = await ordersCollection.aggregate([
                 { $match: query },
                 {
@@ -128,11 +160,14 @@ async function run() {
                                     _id: 1,
                                     product_name: 1,
                                     description: 1,
-                                    price: 1,
+                                    sellPrice: 1,
                                     image: 1,
                                     category: 1,
+                                    brand: 1,
+                                    mobile: 1,
                                     location: 1,
                                     condition: 1,
+                                    sell: 1,
                                     id: { "$toObjectId": "$$product_id" }
                                 }
                             },
@@ -432,7 +467,7 @@ async function run() {
             admin
                 .auth()
                 .deleteUser(uid)
-                .then(async (res) => {
+                .then(async () => {
                     const result = await userCollection.deleteOne(query);
                     res.send(result);
                 })
