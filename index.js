@@ -4,11 +4,16 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const admin = require('firebase-admin');
+const serviceAccount = require("./firebase-service-account-key.json");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
 
 const port = process.env.PORT || 5000;
 const mongoUser = process.env.USER_NAME
@@ -40,6 +45,7 @@ async function run() {
         const productsCollection = client.db('used').collection('products');
         const wishListCollection = client.db('used').collection('wishlist');
         const ordersCollection = client.db('used').collection('orders');
+        const brandCollection = client.db('used').collection('brand');
 
         async function verifyAdmin(req, res, next) {
             const id = req.decoded?.uid;
@@ -100,6 +106,48 @@ async function run() {
                     }
                 })
                 .catch(err => res.send(err));
+        });
+
+        // my orders 
+        app.get('/my-orders/:uid', verifyJWT, async (req, res) => {
+            const decodedUid = req.decoded.uid;
+            const uid = req.params.uid;
+            if (decodedUid !== uid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            const query = { customer_id: uid };
+            const result = await ordersCollection.aggregate([
+                { $match: query },
+                {
+                    $lookup: {
+                        from: 'products',
+                        let: { product_id: "$productID" },
+                        pipeline: [
+                            {
+                                $project: {
+                                    _id: 1,
+                                    product_name: 1,
+                                    description: 1,
+                                    price: 1,
+                                    image: 1,
+                                    category: 1,
+                                    location: 1,
+                                    condition: 1,
+                                    id: { "$toObjectId": "$$product_id" }
+                                }
+                            },
+                            { $match: { $expr: { $eq: ["$_id", "$id"] } } }
+                        ],
+                        as: 'product'
+                    }
+                },
+                {
+                    $set: {
+                        product: { $arrayElemAt: ["$product", 0] }
+                    }
+                }
+            ]).sort({ date: 1 }).toArray();
+            res.send(result);
         });
 
         // insert product 
@@ -187,7 +235,10 @@ async function run() {
         app.get('/advertise-product', async (req, res) => {
             const result = await productsCollection.aggregate([
                 {
-                    $match: { advertise: true }
+                    $match: {
+                        advertise: true,
+                        sell: { $exists: false }
+                    }
                 },
                 {
                     $lookup: {
@@ -224,7 +275,7 @@ async function run() {
                 return res.status(403).send({ message: 'unautorized' });
             }
             const query = { authorID: uid };
-            const result = await productsCollection.find({}).toArray();
+            const result = await productsCollection.find({}).sort({ _id: -1 }).toArray();
             res.send(result);
         });
 
@@ -261,15 +312,56 @@ async function run() {
         });
 
         // get category
-        app.get('/category', async (req, res) => {
+        app.get('/categories', async (req, res) => {
             const query = {};
             const result = await categoryCollection.find(query).toArray();
             res.send(result);
         });
 
+        // get product by category
+        app.get('/category/:category_name', async (req, res) => {
+            const category = req.params.category_name;
+            await categoryCollection.aggregate([
+                { $match: { value: category } },
+                {
+                    $lookup: {
+                        from: 'products',
+                        localField: 'category',
+                        foreignField: 'category',
+                        as: 'products',
+                    }
+                },
+                { $unwind: { path: "$products", } },
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "products.authorID",
+                        foreignField: "uid",
+                        as: "author",
+                    }
+                }, {
+                    "$addFields": {
+                        "author": {
+                            "$arrayElemAt": ["$author", -1]
+                        }
+                    }
+                },
+                { $unwind: "$author" },
+            ]).toArray((err, result) => {
+                if (result) {
+                    return res.send(result[0]);
+                }
+                return res.send(err);
+            });
+        });
+
         // add category
         app.post('/category', async (req, res) => {
             const category = req.body;
+            const findCategory = await categoryCollection.findOne({ value: category.value });
+            if (findCategory) {
+                return res.send({ status: 'bad', message: 'Category Already Exists' });
+            }
             const result = await categoryCollection.insertOne(category);
             res.send(result);
         });
@@ -279,6 +371,32 @@ async function run() {
             const id = req.params.id;
             const query = { _id: ObjectId(id) };
             const result = await categoryCollection.deleteOne(query);
+            res.send(result);
+        });
+
+        // add brand
+        app.post('/brand', verifyJWT, verifyAdmin, async (req, res) => {
+            const brand = req.body;
+            const findBrand = await brandCollection.findOne({ value: brand.value });
+            if (findBrand) {
+                return res.send({ status: 'bad', message: 'Brand Already Exists' });
+            }
+            const result = await brandCollection.insertOne(brand);
+            res.send(result);
+        });
+
+        // add brand
+        app.get('/brand', async (req, res) => {
+            const query = {};
+            const result = await brandCollection.find(query).sort({ _id: -1 }).toArray();
+            res.send(result);
+        });
+
+        // delete brand
+        app.delete('/brand/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const result = await brandCollection.deleteOne(query);
             res.send(result);
         });
 
@@ -300,6 +418,25 @@ async function run() {
             const query = { uid: uid };
             const result = await userCollection.findOne(query);
             res.send(result);
+        });
+
+        // admin function
+        app.delete('/user/:uid', verifyJWT, verifyAdmin, async (req, res) => {
+            const uid = req.params.uid;
+            const decodedUid = req.decoded.uid;
+            const adminUid = req.headers.admin_uid;
+            const query = { uid: uid };
+            if (decodedUid !== adminUid) {
+                return res.status(403).send({ message: 'unautorized' });
+            }
+            admin
+                .auth()
+                .deleteUser(uid)
+                .then(async (res) => {
+                    const result = await userCollection.deleteOne(query);
+                    res.send(result);
+                })
+                .catch(err => res.send(err));
         });
 
         // admin function
