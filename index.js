@@ -181,7 +181,7 @@ async function run() {
                         product: { $arrayElemAt: ["$product", 0] }
                     }
                 }
-            ]).sort({ date: 1 }).toArray();
+            ]).sort({ _id: -1 }).toArray();
             res.send(result);
         });
 
@@ -196,6 +196,7 @@ async function run() {
             res.send(result);
         });
 
+        // get all products
         app.get('/products', async (req, res) => {
             const query = {};
             const result = await productsCollection.aggregate([
@@ -223,8 +224,23 @@ async function run() {
         app.get('/product/:id', async (req, res) => {
             const id = req.params.id;
             const query = { _id: ObjectId(id) };
-            const result = await productsCollection.findOne(query);
-            res.send(result);
+            const result = await productsCollection.aggregate([
+                { $match: { _id: ObjectId(id) } },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'authorID',
+                        foreignField: 'uid',
+                        as: 'author',
+                    }
+                },
+                {
+                    $set: {
+                        author: { $arrayElemAt: ["$author", 0] }
+                    }
+                }
+            ]).toArray();
+            res.send(result[0]);
         });
 
         // wishlist
@@ -254,9 +270,11 @@ async function run() {
                                 $project: {
                                     _id: 1,
                                     product_name: 1,
-                                    price: 1,
+                                    sellPrice: 1,
+                                    originalPrice: 1,
                                     image: 1,
                                     category: 1,
+                                    brand: 1,
                                     location: 1,
                                     condition: 1,
                                     id: { "$toObjectId": "$$product_id" }
@@ -377,40 +395,37 @@ async function run() {
         });
 
         // get product by category
-        app.get('/category/:category_name', async (req, res) => {
+        app.get('/category/:category_name', (req, res) => {
             const category = req.params.category_name;
-            await categoryCollection.aggregate([
-                { $match: { value: category } },
-                {
-                    $lookup: {
-                        from: 'products',
-                        localField: 'category',
-                        foreignField: 'category',
-                        as: 'products',
-                    }
-                },
-                { $unwind: { path: "$products", } },
-                {
-                    $lookup: {
-                        from: "users",
-                        localField: "products.authorID",
-                        foreignField: "uid",
-                        as: "author",
-                    }
-                }, {
-                    "$addFields": {
-                        "author": {
-                            "$arrayElemAt": ["$author", -1]
+            categoryCollection.findOne({ value: category })
+                .then(async (result) => {
+                    const products = await productsCollection.aggregate([
+                        {
+                            $match: {
+                                category: result?.category,
+                                sell: { $exists: false }
+                            }
+                        },
+                        {
+                            $lookup: {
+                                from: 'users',
+                                localField: 'authorID',
+                                foreignField: 'uid',
+                                pipeline: [
+                                    { $project: { _id: 0, role: 0, uid: 0 } }
+                                ],
+                                as: 'author'
+                            }
+                        },
+                        {
+                            $set: {
+                                author: { $arrayElemAt: ["$author", 0] }
+                            }
                         }
-                    }
-                },
-                { $unwind: "$author" },
-            ]).toArray((err, result) => {
-                if (result) {
-                    return res.send(result[0]);
-                }
-                return res.send(err);
-            });
+                    ]).sort({ _id: -1 }).toArray();
+                    result.products = products;
+                    res.send(result);
+                });
         });
 
         // add category
